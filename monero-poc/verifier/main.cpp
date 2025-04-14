@@ -23,7 +23,8 @@ uint8_t operatorPrivateKey[32]= {0};
 char operatorPublicIdentity[128] = {0};
 #define CUSTOM_MINING_SOLUTION_VERIFICATION_MESSAGE_TYPE 55
 
-#define DUMMY_TEST 0
+#define DUMMY_TEST 1
+static int DUMMY_COMPUTOR_ID = 0;
 
 #if DUMMY_TEST
 #define OPERATOR_PORT 31841
@@ -208,7 +209,9 @@ void verifyThread()
     randomx_cache *cache = randomx_alloc_cache(flags);
     randomx_init_cache(cache, local_task.m_seed, 32);
     randomx_vm *vm = randomx_create_vm(flags, cache, NULL);
+#if !DUMMY_TEST
     while (currentTask.taskIndex == 0) SLEEP(100); // wait for the first job
+#endif
 
     while (!shouldExit)
     {
@@ -301,7 +304,7 @@ void verifyThread()
 #if DUMMY_TEST
         {
             solution dummySolution;
-            dummySolution.nonce = 0;
+            dummySolution.nonce = DUMMY_COMPUTOR_ID + 676;
             std::lock_guard<std::mutex> validLock(gValidSolLock);
             gSubmittingSolutionsVec.push_back(dummySolution);
 
@@ -497,6 +500,11 @@ int run(int argc, char *argv[]) {
         else if(arg == "--nodeip")
         {
             operatorIp = argv[++i];
+        }
+        else if(arg == "--id")
+        {
+            DUMMY_COMPUTOR_ID = std::stoi(argv[++i]);
+            std::cout << "Dummy computor ID: " << DUMMY_COMPUTOR_ID << std::endl;
         }
         else if (arg == "--peers")
         {
