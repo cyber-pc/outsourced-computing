@@ -45,6 +45,8 @@ struct task
     uint8_t gammingNonce[32];
 
     uint64_t taskIndex; // ever increasing number (unix timestamp in ms)
+    uint16_t firstComputorIndex, lastComputorIndex;
+    uint32_t padding;
 
     uint8_t m_blob[408]; // Job data from pool
     uint64_t m_size;  // length of the blob
@@ -71,6 +73,8 @@ struct solution
 struct XMRTask
 {
     uint64_t taskIndex; // ever increasing number (unix timestamp in ms)
+    uint16_t firstComputorIndex, lastComputorIndex;
+    uint32_t padding;
 
     uint8_t m_blob[408]; // Job data from pool
     uint64_t m_size;  // length of the blob
@@ -85,6 +89,10 @@ struct XMRTask
         task tk;
 
         tk.taskIndex = taskIndex;
+        tk.firstComputorIndex = firstComputorIndex;
+        tk.lastComputorIndex = lastComputorIndex;
+        tk.padding = padding;
+
         memcpy(tk.m_blob, m_blob, 408);
         tk.m_size = m_size;
         tk.m_target = m_target;
@@ -375,7 +383,7 @@ void verifyThread()
             {
                 gStale.fetch_add(1);
                 uint32_t nonce = candidate.nonce;
-                printf("Stale Share from comp %d\n", nonce % 676);
+                printf("Stale Share from comp %d\n", nonce);
                 continue;
             }
             else if (candidate._taskIndex > local_task.taskIndex)
@@ -403,7 +411,7 @@ void verifyThread()
             {
                 verifedSol.isValid = 1;
                 gValid.fetch_add(1);
-                printf("Valid Share from comp %d: %s\n", nonce % 676, hex);
+                printf("Valid Share from comp %d: %s\n", nonce, hex);
             }
             else
             {
@@ -413,7 +421,7 @@ void verifyThread()
                     verifedSol.isValid = 0;
                 }
                 gInValid.fetch_add(1);
-                printf("Invalid Share from comp %d: %s\n", nonce % 676, hex);
+                printf("Invalid Share from comp %d: %s\n", nonce, hex);
             }
             gReportedSolutionsVec.push_back(verifedSol);
         }
@@ -686,17 +694,18 @@ void verifySolutionFromNode(const XMRTask& rTask, std::vector<XMRSolution>& rSol
         verifedSol.taskIndex = local_task.taskIndex;
         verifedSol.padding = candidate.padding;
 
+        uint16_t computorID = local_task.firstComputorIndex + (nonce % (676 / 4));
         if (v < local_task.m_target && !dummyInvalid)
         {
             verifedSol.isValid = 1;
             gValid.fetch_add(1);
-            printf("Valid Share from comp %d: %s\n", nonce % 676, hex);
+            printf("Valid Share from comp %d: %s\n", computorID, hex);
         }
         else
         {
             verifedSol.isValid = 0;
             gInValid.fetch_add(1);
-            printf("Invalid Share from comp %d: %s\n", nonce % 676, hex);
+            printf("Invalid Share from comp %d: %s\n", computorID, hex);
         }
         // Save the solution for sending to node this is an invalidate solutions
         {
