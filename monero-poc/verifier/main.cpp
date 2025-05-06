@@ -23,7 +23,7 @@ uint8_t operatorSubSeed[32]= {0};
 uint8_t operatorPrivateKey[32]= {0};
 char operatorPublicIdentity[128] = {0};
 
-#define DUMMY_TEST 0
+#define DUMMY_TEST 1
 std::mutex gDummyLock;
 unsigned long long gDummyCounter = 0;
 
@@ -670,10 +670,14 @@ void listenerThread(const char* nodeIp)
     }
 }
 
-constexpr int64_t OFFSET_TIME_STAMP_IN_MS = 600000;
+// The time windows allow we get more task from previous.
+// This will allow us to get late arrival task
+// Params controls if we should skip too late task compare to current time stamp
+//constexpr int64_t OFFSET_TIME_STAMP_IN_MS = 1 * 60 * 60 * 1000; // 2 hours
+constexpr int64_t OFFSET_TIME_STAMP_IN_MS = 10 * 60 * 1000; // 10 minutes
 
 template <typename T>
-void printTaskInfo(T* tk, std::string logHeader)
+void printTaskInfo(const T* tk, std::string logHeader)
 {
     uint64_t delta = 0;
     int64_t delta_local = 0;
@@ -682,7 +686,7 @@ void printTaskInfo(T* tk, std::string logHeader)
         // Convert the time point to milliseconds since the epoch (Unix timestamp)
         auto duration = now.time_since_epoch();
         auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-        delta_local = (int64_t)(tk->taskIndex) - (int64_t)(milliseconds);
+        delta_local = std::abs((int64_t)(tk->taskIndex) - (int64_t)(milliseconds));
     }
     // if (prevTask)
     // {
@@ -691,7 +695,7 @@ void printTaskInfo(T* tk, std::string logHeader)
     // prevTask = tk->taskIndex;
     char dbg[256] = {0};
     std::string debug_log = logHeader;
-    sprintf(dbg, "Received task index %lu (d_prev: %lu ms) (d_local: %lu ms): ", tk->taskIndex, delta, delta_local);
+    sprintf(dbg, "Received task index %lu (d_prev: %lu ms) (d_local: %f m): ", tk->taskIndex, delta, delta_local / 1000.f / 60);
     debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
     int blobSz = tk->m_size;
     for (int i = 0; i < 4; i++)
@@ -710,9 +714,9 @@ void printTaskInfo(T* tk, std::string logHeader)
 
     sprintf(dbg, " | diff %llu", 0xffffffffffffffffULL/tk->m_target);
     debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
-    sprintf(dbg, " | height %lu\n", tk->m_height);
+    sprintf(dbg, " | height %lu", tk->m_height);
     debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
-    printf("%s", debug_log.c_str());
+    std::cout << debug_log << std::endl << std::flush;
 }
 
 static uint64_t lastTaskTimeStamp = 0;
@@ -896,8 +900,8 @@ bool fetchCustomMiningData(QCPtr pConnection, const char* logHeader)
     packet.header.randomizeDejavu();
     packet.header.setType(RequestedCustomMiningData::type);
 
-    uint64_t fromTaskIndex = lastTaskTimeStamp;// - OFFSET_TIME_STAMP_IN_MS;
-    uint64_t toTaskIndex = 0; // Fetch all the task
+    uint64_t fromTaskIndex = lastTaskTimeStamp > OFFSET_TIME_STAMP_IN_MS ? lastTaskTimeStamp - OFFSET_TIME_STAMP_IN_MS : lastTaskTimeStamp;
+    uint64_t toTaskIndex = 0; // Fetch all the task from the fromTaskIndex
     packet.requestData.dataType = RequestedCustomMiningData::taskType;
     packet.requestData.fromTaskIndex = fromTaskIndex;
     packet.requestData.toTaskIndex = toTaskIndex;
@@ -922,21 +926,24 @@ bool fetchCustomMiningData(QCPtr pConnection, const char* logHeader)
         // Verified the message
         if (respond_header.type() == RespondCustomMiningData::type)
         {
-            if (respond_header.size() > sizeof(RequestResponseHeader))
+            if (respond_header.size() > sizeof(RequestResponseHeader) + sizeof(CustomMiningRespondDataHeader))
             {
                 unsigned int dataSize = respond_header.size() - sizeof(RequestResponseHeader);
                 std::vector<unsigned char> dataBuffer(dataSize);
                 unsigned char* pData = &dataBuffer[0];
                 int receivedSize = pConnection->receiveData(pData, dataSize);
-
+                CustomMiningRespondDataHeader respondDataHeader = *(CustomMiningRespondDataHeader*)pData;
                 // Data is failed to rev
                 if (receivedSize != dataSize)
                 {
+                    std::cout << "ReceivedSize " << receivedSize << " vs ExpectedSize: " << respond_header.size()
+                        << ". Data size: item count " << respondDataHeader.itemCount << ", item size: " << respondDataHeader.itemSize
+                        << ", total size " << respondDataHeader.itemCount * respondDataHeader.itemSize
+                        << std::endl;
                     return false;
                 }
 
                 unsigned long long lastReceivedTaskTs = 0;
-                CustomMiningRespondDataHeader respondDataHeader = *(CustomMiningRespondDataHeader*)pData;
                 if (respondDataHeader.itemCount > 0 && respondDataHeader.respondType == RespondCustomMiningData::taskType)
                 {
                     std::vector<XMRTask> taskVec;
@@ -945,40 +952,20 @@ bool fetchCustomMiningData(QCPtr pConnection, const char* logHeader)
                     {
                         XMRTask rawTask = pTask[i];
 
-                        lastReceivedTaskTs = rawTask.taskIndex;
+                        lastReceivedTaskTs = rawTask.taskIndex > lastReceivedTaskTs ? rawTask.taskIndex : lastReceivedTaskTs;
                         //printTaskInfo<XMRTask>(&rawTask, logHeader);
                         task tk = rawTask.convertToTask();
                         // Update the task
                         nodeTasks[rawTask.taskIndex] = rawTask;
                     }
 
-                    // Remove too late task
-                    auto now = std::chrono::system_clock::now();
-                    auto duration = now.time_since_epoch();
-                    auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-                    for (auto it = nodeTasks.begin(); it != nodeTasks.end(); )
-                    {
-                        if (std::abs((int64_t)it->first - (int64_t)(milliseconds) > OFFSET_TIME_STAMP_IN_MS))
-                        {
-                            it = nodeTasks.erase(it);
-                        }
-                        else
-                        {
-                            ++it;
-                        }
-                    }
-
                     // From current active task. Try to fetch solutions/shares of the task
                     getCustomMiningSolutions(pConnection, logHeader, nodeTasks);
 
-                    // Update the last time stamp
+                    // Update the last time stamp by the last task received
                     if (lastReceivedTaskTs > 0)
                     {
-                        lastTaskTimeStamp = lastReceivedTaskTs + 1;
-                    }
-                    else
-                    {
-                        lastReceivedTaskTs = lastReceivedTaskTs + 10000;
+                        lastTaskTimeStamp = lastReceivedTaskTs;
                     }
                 }
             }
@@ -1007,11 +994,16 @@ void operatorFetcherThread(const char* nodeIp)
             bool haveCustomMiningData = fetchCustomMiningData(qc, log_header.c_str());
             if (!haveCustomMiningData)
             {
+                // No custom mining sol. Sleep and update the time stamp
+                auto now = std::chrono::system_clock::now();
+                auto duration = now.time_since_epoch();
+                auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+                lastTaskTimeStamp = milliseconds;
                 SLEEP(1000);
             }
             else
             {
-                SLEEP(50000);
+                SLEEP(10000);
             }
         }
         catch (std::logic_error &ex) {
