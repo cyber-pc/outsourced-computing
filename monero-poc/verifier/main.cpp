@@ -216,12 +216,15 @@ uint64_t prevTask = 0;
 std::mutex compScoreLock;
 
 #if TESTNET_ENABLE
-#define OPERATOR_PORT 31841
+#define DEFAULT_OPERATOR_PORT 31841
 #else
-#define OPERATOR_PORT 21841
+#define DEFAULT_OPERATOR_PORT 21841
 #endif
+int gOperatorPort = DEFAULT_OPERATOR_PORT;
 
-#define PORT 21841
+#define DEFAULT_PORT 21841
+int gPeerPort = DEFAULT_PORT;
+
 #define SLEEP(x) std::this_thread::sleep_for(std::chrono::milliseconds (x));
 bool shouldExit = false;
 
@@ -465,7 +468,7 @@ void listenerThread(const char* nodeIp)
             if (needReconnect) {
                 needReconnect = false;
                 nPeer.fetch_add(1);
-                qc = make_qc(nodeIp, PORT);
+                qc = make_qc(nodeIp, gPeerPort);
                 qc->exchangePeer();// do the handshake stuff
                 // TODO: connect to received peers
                 printf("Connected to %s\n", nodeIp);
@@ -664,7 +667,7 @@ std::vector<std::string> split(const std::string& s, char delimiter) {
 
 void printHelp()
 {
-    printf("./oc_verifier --seed [OPERATOR SEED] --nodeip [OPERATOR node ip] --peers [nodeip0],[nodeip1], ... ,[nodeipN]\n");
+    printf("./oc_verifier --seed [OPERATOR SEED] --nodeip [OPERATOR node ip] --nodeport [OPERATOR node port] --peerport [peer port] --peers [nodeip0],[nodeip1], ... ,[nodeipN]\n");
 }
 
 void saveScore()
@@ -714,6 +717,14 @@ int run(int argc, char *argv[]) {
         {
             operatorIp = argv[++i];
         }
+        else if(arg == "--nodeport")
+        {
+            gOperatorPort = std::stoi(argv[++i]);
+        }
+        else if(arg == "--peerport")
+        {
+            gPeerPort = std::stoi(argv[++i]);
+        }
         else if (arg == "--peers")
         {
             std::string peerList = argv[++i];
@@ -762,7 +773,7 @@ int run(int argc, char *argv[]) {
     bool enableNodeVerifier = false;
     if (!seed.empty() && !operatorIp.empty())
     {
-        int sts = launchNodeVerifier(operatorIp.c_str(), OPERATOR_PORT, seed.c_str());
+        int sts = launchNodeVerifier(operatorIp.c_str(), gOperatorPort, seed.c_str());
         enableNodeVerifier = (sts == 0);
     }
 
